@@ -23,8 +23,9 @@ namespace comp::game::sampler
 		// Samples held until the frame they fall in ends. A frame counted in a
 		// window is at most 1 s long, about 34 samples.
 		constexpr uint32_t kPendingCap = 64;
-		constexpr LONGLONG kPeriodMin100ns = 300000;  // 30 ms
-		constexpr LONGLONG kPeriodSpan100ns = 200000; // up to 50 ms, 25 Hz on average
+		// 66 Hz on average (the stock 25 Hz catches at most two samples of a 80 ms hitch), about 0.7% of the game thread.
+		constexpr LONGLONG kPeriodMin100ns = 100000;  // 10 ms
+		constexpr LONGLONG kPeriodSpan100ns = 100000; // up to 20 ms
 		// The module list is read again after a sample outside every module, at
 		// most this often, and at least every kRefreshMaxSeconds.
 		constexpr double kRefreshSeconds = 5.0;
@@ -671,6 +672,33 @@ namespace comp::game::sampler
 	void set_active(bool on)
 	{
 		g_active.store(on && g_thread != nullptr, std::memory_order_relaxed);
+	}
+
+	std::string pending_text()
+	{
+		Sample copy[kPendingCap];
+		uint32_t n = 0;
+		AcquireSRWLockExclusive(&g_lock);
+		n = g_pending_count;
+		for (uint32_t i = 0; i < n; i++) copy[i] = g_pending[i];
+		ReleaseSRWLockExclusive(&g_lock);
+
+		const auto where = [](uint32_t slot, uintptr_t address)
+			{
+				if (slot == kOutside) return std::format("?{:08X}", static_cast<uint32_t>(address));
+				return std::format("{}+{:X}", g_slots[slot].name, static_cast<uint32_t>(address - g_slots[slot].base));
+			};
+		std::string s;
+		for (uint32_t i = 0; i < n; i++)
+		{
+			const Sample& m = copy[i];
+			if (i) s += ", ";
+			if (m.system)
+				s += std::format("{} < {}", kKindNames[m.kind], m.caller == kOutside ? std::string("?") : where(m.caller, m.caller_address));
+			else
+				s += where(m.slot, m.eip);
+		}
+		return s;
 	}
 
 	void frame_done(bool counted)

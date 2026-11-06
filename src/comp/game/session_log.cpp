@@ -855,6 +855,29 @@ namespace comp::game::session_log
 		{
 			const bool game = in_game();
 			const bool counted = game && frame_ms <= kPerfGapMs;
+			// A slow frame gets its own line (at most kHitchMaxLines per session): where its time went, and what the game thread
+			// executed in it. [Perf] and [PerfSlow] only have averages over 30 s, which cannot name a single 80 ms stall.
+			if (game)
+			{
+				static double s_typical_ms = 33.0;
+				static uint32_t s_hitch_lines = 0;
+				constexpr uint32_t kHitchMaxLines = 400;
+				const double threshold = (std::max)(50.0, 1.6 * s_typical_ms);
+				if (frame_ms > threshold && s_hitch_lines < kHitchMaxLines)
+				{
+					s_hitch_lines++;
+					const double wait_ms = ticks_ms(g_pending.present_wait);
+					const double draw_ms = ticks_ms(g_pending.draw_ticks);
+					const double eof_ms = ticks_ms(g_pending.end_of_frame);
+					shared::common::log_event("Hitch", std::format(
+						"{:.1f} ms (typical {:.1f}): engine {:.1f}, wrapper draws {:.1f} ({} draws), wrapper end of frame {:.1f}, waiting in "
+						"Present {:.1f} | samples: {}",
+						frame_ms, s_typical_ms, (std::max)(0.0, frame_ms - wait_ms - draw_ms - eof_ms), draw_ms, g_pending.draws, eof_ms, wait_ms,
+						sampler::pending_text()));
+				}
+				// Follows the typical frame, and a hitch hardly moves it.
+				if (frame_ms <= kPerfGapMs) s_typical_ms += (std::min)(frame_ms, 2.0 * s_typical_ms) * 0.02 - s_typical_ms * 0.02;
+			}
 			sampler::frame_done(counted);
 			sampler::set_active(game);
 			// The thread's CPU time is read at every Present, so a counted

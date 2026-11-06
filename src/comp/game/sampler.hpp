@@ -34,6 +34,10 @@ namespace comp::game::sampler
 	// when the frame that just ended is `counted`, else they are dropped.
 	void frame_done(bool counted);
 
+	// The samples of the frame in progress, for a [Hitch] line, before frame_done takes them: each as module+rva
+	// (or system kind < caller module+rva), in the order they were taken. Empty when no sample fell in the frame.
+	std::string pending_text();
+
 	// Starts a [Perf] window.
 	void begin_window();
 
