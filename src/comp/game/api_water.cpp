@@ -841,7 +841,7 @@ namespace comp::game::api_submit
 	void water_on_present()
 	{
 		settle_near_look();
-		const UINT keep = static_cast<UINT>(shared::common::config::get().remix_api.evict_frames);
+		const UINT keep = comp::game::api::evict_keep(shared::common::config::get().remix_api.evict_frames);
 		const UINT now = frame();
 		auto& st = water_stats();
 		// RetainedKeepCulled: visible entries kept while culled get the long

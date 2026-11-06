@@ -322,6 +322,8 @@ namespace comp
 		// Every hooked engine site, at the first Present and every 600 frames.
 		game::call_chain::on_present();
 		part("camera, cursor, UI boundary, hook check");
+		// While frame_count() still names the frame.
+		game::api::note_present_for_ttl(game::menu_bg::frozen_menu() && !game::world_draw_seen_this_frame());
 		shared::common::ffp_state::get().on_present();
 		remix_protocol::on_present();
 		game::lights_updated_frame = false;

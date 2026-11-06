@@ -880,7 +880,7 @@ namespace comp::game::api::retained
 	UINT stale_after(const MeshEntry& e, UINT evict_frames, bool kept)
 	{
 		if (!kept || !e.retained || !e.retained_visible) return evict_frames;
-		const UINT ttl = static_cast<UINT>(shared::common::config::get().remix_api.retained_keep_culled_frames);
+		const UINT ttl = comp::game::api::evict_keep(shared::common::config::get().remix_api.retained_keep_culled_frames);
 		return (std::max)(evict_frames, ttl);
 	}
 

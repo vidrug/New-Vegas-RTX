@@ -669,7 +669,7 @@ namespace comp::game::api_submit
 	void particles_on_present()
 	{
 		const UINT now = frame();
-		const UINT keep = static_cast<UINT>(shared::common::config::get().remix_api.evict_frames);
+		const UINT keep = comp::game::api::evict_keep(shared::common::config::get().remix_api.evict_frames);
 		for (auto it = g_systems.begin(); it != g_systems.end();)
 		{
 			if (now - it->second.last_frame > keep && now >= it->second.hold_until)

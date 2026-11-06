@@ -1806,7 +1806,7 @@ namespace comp::game::api_submit
 
 		if (!g_retired.empty()) destroy_retired(false);
 
-		const UINT keep = static_cast<UINT>(shared::common::config::get().remix_api.evict_frames);
+		const UINT keep = comp::game::api::evict_keep(shared::common::config::get().remix_api.evict_frames);
 		evict_stale(g_terrain, keep, terrain_stats());
 		evict_stale(g_far_lod, keep, far_lod_stats());
 

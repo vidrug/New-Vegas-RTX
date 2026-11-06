@@ -606,6 +606,41 @@ namespace comp::game::api
 
 	namespace
 	{
+		UINT g_ttl_credit = 0;
+		UINT g_world_frames_since_menu = 0;
+		UINT g_largest_ttl = 0;
+		bool g_ttl_in_menu = false;
+	}
+
+	void note_present_for_ttl(bool frozen_menu_frame)
+	{
+		if (frozen_menu_frame)
+		{
+			// No item from before the last menu is alive any more: that credit is spent.
+			if (g_world_frames_since_menu > g_largest_ttl) g_ttl_credit = 0;
+			g_world_frames_since_menu = 0;
+			g_ttl_in_menu = true;
+			if (g_ttl_credit < 0x40000000u) ++g_ttl_credit;
+			return;
+		}
+		if (g_ttl_in_menu)
+		{
+			g_ttl_in_menu = false;
+			shared::common::log("RemixApi", std::format("eviction clock: {} frames of credit after a menu over the frozen background",
+				g_ttl_credit), shared::common::LOG_TYPE::LOG_TYPE_STATUS, false);
+		}
+		if (g_world_frames_since_menu < 0x40000000u) ++g_world_frames_since_menu;
+	}
+
+	UINT evict_keep(int configured_frames)
+	{
+		const UINT ttl = static_cast<UINT>(configured_frames);
+		g_largest_ttl = (std::max)(g_largest_ttl, ttl);
+		return g_world_frames_since_menu <= ttl ? ttl + g_ttl_credit : ttl;
+	}
+
+	namespace
+	{
 		// The build budget's fair queue (take_build_budget). A waiter is a
 		// build key that was refused and keeps asking; one that stopped asking
 		// for kForgetFrames frames (culled, unloaded) leaves the queue.

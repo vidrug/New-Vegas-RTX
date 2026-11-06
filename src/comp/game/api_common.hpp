@@ -148,6 +148,14 @@ namespace comp::game::api
 	remixapi_Interface* bridge();
 	UINT frame();
 
+	// The eviction clock. frame() counts every Present, also those of the frames of a menu over the frozen background, which
+	// rasterise no world and trace nothing, so a long pause used to age out every mesh, texture and placement the game had not
+	// drawn for a moment, and all of them were rebuilt in the first frames after it. Each such frame adds one frame of credit,
+	// and evict_keep adds the credit to a TTL until that TTL's length of world frames has passed since the menu. So the age of
+	// what was alive before a menu counts world frames only, and anything drawn later never lives longer than TTL + credit.
+	void note_present_for_ttl(bool frozen_menu_frame);
+	UINT evict_keep(int configured_frames);
+
 	// Per-frame budget of new API objects. A draw that cannot take a slot is
 	// not drawn this frame (or keeps its current copy) and asks again at its
 	// next draw. `key` names what is being built (a material key, a mesh

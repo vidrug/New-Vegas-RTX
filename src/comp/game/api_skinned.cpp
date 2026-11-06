@@ -1202,7 +1202,7 @@ namespace comp::game::api_submit
 	void skinned_on_present()
 	{
 		auto& st = skinned_stats();
-		const UINT keep = static_cast<UINT>(shared::common::config::get().remix_api.evict_frames);
+		const UINT keep = comp::game::api::evict_keep(shared::common::config::get().remix_api.evict_frames);
 		const UINT now = frame();
 
 		for (auto it = g_meshes.begin(); it != g_meshes.end();)

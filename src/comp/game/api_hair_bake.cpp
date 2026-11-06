@@ -414,7 +414,7 @@ namespace comp::game::api::hair_bake
 
 		void evict(UINT now)
 		{
-			const UINT keep = static_cast<UINT>(shared::common::config::get().remix_api.texture_evict_frames);
+			const UINT keep = comp::game::api::evict_keep(shared::common::config::get().remix_api.texture_evict_frames);
 			for (auto it = g_bakes.begin(); it != g_bakes.end();)
 			{
 				Bake& b = it->second;

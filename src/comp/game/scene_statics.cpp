@@ -3083,7 +3083,7 @@ namespace comp::game::scene_statics
 		void evict()
 		{
 			const UINT now = frame();
-			const UINT keep = static_cast<UINT>(cfg().evict_frames);
+			const UINT keep = comp::game::api::evict_keep(cfg().evict_frames);
 			auto* b = bridge();
 			for (auto it = g_meshes.begin(); it != g_meshes.end();)
 			{

@@ -3,6 +3,7 @@
 #include "tex_archive.hpp"
 #include "call_chain.hpp"
 #include "scene_graph.hpp"
+#include "api_common.hpp"
 #include "shared/fnv_exe.hpp"
 
 #include "shared/common/config.hpp"
@@ -430,7 +431,7 @@ namespace comp::game::tex_pack
 		{
 			auto& G = g();
 			const UINT now = frame_now();
-			const UINT keep = static_cast<UINT>(shared::common::config::get().texture_packs.evict_frames);
+			const UINT keep = comp::game::api::evict_keep(shared::common::config::get().texture_packs.evict_frames);
 			std::vector<PathRec*> stale;
 
 			AcquireSRWLockShared(&G.lock);

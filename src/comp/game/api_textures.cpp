@@ -1227,7 +1227,7 @@ namespace comp::game::api::textures
 		g_sweep_tick = 0;
 
 		const UINT now = frame();
-		const UINT keep = static_cast<UINT>(shared::common::config::get().remix_api.texture_evict_frames);
+		const UINT keep = comp::game::api::evict_keep(shared::common::config::get().remix_api.texture_evict_frames);
 		auto* b = bridge();
 
 		for (auto it = g_uploads.begin(); it != g_uploads.end();)

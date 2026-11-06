@@ -1108,7 +1108,7 @@ namespace comp::game::api_submit
 	void statics_on_present()
 	{
 		const UINT now = frame();
-		const UINT keep = static_cast<UINT>(shared::common::config::get().remix_api.evict_frames);
+		const UINT keep = comp::game::api::evict_keep(shared::common::config::get().remix_api.evict_frames);
 		auto& st = statics_stats();
 		sweep_places(now, keep);
 		for (auto it = g_meshes.begin(); it != g_meshes.end();)

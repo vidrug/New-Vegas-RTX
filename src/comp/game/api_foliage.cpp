@@ -1381,7 +1381,7 @@ namespace comp::game::api_submit
 	void foliage_on_present()
 	{
 		auto& st = foliage_stats();
-		const UINT keep = static_cast<UINT>(shared::common::config::get().remix_api.evict_frames);
+		const UINT keep = comp::game::api::evict_keep(shared::common::config::get().remix_api.evict_frames);
 		const UINT now = frame();
 
 		// Hooks go in here, between frames. Grass needs the render-pass

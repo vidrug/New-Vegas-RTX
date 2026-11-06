@@ -1155,7 +1155,7 @@ namespace comp::game::api_submit
 	void unlit_on_present()
 	{
 		const UINT now = frame();
-		const UINT keep = static_cast<UINT>(shared::common::config::get().remix_api.evict_frames);
+		const UINT keep = comp::game::api::evict_keep(shared::common::config::get().remix_api.evict_frames);
 		for (auto it = g_entries.begin(); it != g_entries.end();)
 		{
 			Entry& en = it->second;
