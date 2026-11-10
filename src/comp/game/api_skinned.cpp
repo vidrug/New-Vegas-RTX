@@ -11,6 +11,7 @@
 #include "scene_graph.hpp"
 #include "stable_origin.hpp"
 #include "stealth_field.hpp"
+#include "shared/fnv_exe.hpp"
 
 #include "shared/common/ffp_state.hpp"
 #include "shared/common/ps_reflect.hpp"
@@ -750,6 +751,124 @@ namespace comp::game::api_submit
 			release_material(sm.material_key);
 		}
 
+		// ---- First-person body diagnostic (2026-11-07) -----------------------------
+		// Seen in game: two player bodies in a mirror (first person, Enhanced Camera
+		// on): one at the feet (EC's), one standing ON the camera, the second only
+		// while aiming with the weapon holstered. This logs the skinned API
+		// instances near the camera with what identifies them: the NiGeometry's
+		// name and three ancestors, its diffuse, the engine pass, the view-model
+		// projection, membership of the player's first-person node, and palette
+		// slot 0 relative to the camera (render space is camera-relative). One
+		// "[FirstPersonDiag]" block whenever that set changes, at most
+		// kDiagBlocks per session and one per kDiagGapFrames.
+		constexpr double kDiagRadius = 300.0;     // game units from the camera
+		constexpr int kDiagBlocks = 80;
+		constexpr UINT kDiagGapFrames = 20;
+		struct DiagEntry
+		{
+			uintptr_t geo = 0;
+			bool vm = false, fp_node = false;
+			uint16_t pass = 0xFFFF;
+			float rel[3] = {};
+			int nb = 0;
+			UINT verts = 0;
+			uint32_t ps = 0;
+		};
+		std::vector<DiagEntry> g_diag;
+		uint64_t g_diag_sig = 0;
+		int g_diag_blocks = 0;
+		UINT g_diag_last = 0;
+
+		std::string object_name(uintptr_t obj)
+		{
+			uint32_t p = 0;
+			char buf[64] = {};
+			if (!obj || !scene_graph::read_u32(obj + 0x08, p) || !p || !scene_graph::read_block(p, buf, sizeof(buf) - 1)) return "?";
+			buf[sizeof(buf) - 1] = 0;
+			for (char& c : buf) if (c && (c < 32 || c > 126)) c = '?';
+			return buf[0] ? std::string(buf) : std::string("\"\"");
+		}
+
+		bool under_first_person_node(uintptr_t geo)
+		{
+			uint32_t player = 0, node = 0;
+			if (!geo || !scene_graph::read_u32(fnv_exe::addr().player, player) || !player ||
+				!scene_graph::read_u32(player + 0x694, node) || !node)
+				return false;
+			uintptr_t obj = geo;
+			for (int depth = 0; obj && depth < 64; ++depth)
+			{
+				if (obj == node) return true;
+				uintptr_t parent = 0;
+				uint32_t flags = 0;
+				if (!scene_graph::read_link(obj, parent, flags)) break;
+				obj = parent;
+			}
+			return false;
+		}
+
+		void diag_note(const SkinMesh& sm, int nb)
+		{
+			if (g_diag_blocks >= kDiagBlocks) return;
+			const float x = game::bone_rows[0][3], y = game::bone_rows[0][7], z = game::bone_rows[0][11];
+			if (std::sqrt(static_cast<double>(x) * x + static_cast<double>(y) * y + static_cast<double>(z) * z) > kDiagRadius) return;
+			DiagEntry e;
+			e.geo = pass_geometry();
+			e.vm = game::uses_viewmodel_projection();
+			e.fp_node = under_first_person_node(e.geo);
+			e.pass = engine_class::current().type;
+			e.rel[0] = x; e.rel[1] = y; e.rel[2] = z;
+			e.nb = nb;
+			e.verts = sm.verts;
+			e.ps = sm.ps_hash;
+			g_diag.push_back(e);
+		}
+
+		void diag_flush(UINT now)
+		{
+			if (g_diag.empty() || g_diag_blocks >= kDiagBlocks) { g_diag.clear(); return; }
+			std::sort(g_diag.begin(), g_diag.end(), [](const DiagEntry& a, const DiagEntry& b) { return a.geo < b.geo; });
+			Hash64 h;
+			for (const auto& e : g_diag)
+			{
+				h.mix(static_cast<uint64_t>(e.geo));
+				h.mix(static_cast<uint64_t>(e.vm) | (static_cast<uint64_t>(e.fp_node) << 1) |
+					(static_cast<uint64_t>(static_cast<int64_t>(std::floor(e.rel[2] / 40.0f)) & 0xFFFF) << 8));
+			}
+			const uint64_t sig = h.get();
+			if (sig == g_diag_sig || now - g_diag_last < kDiagGapFrames) { g_diag.clear(); return; }
+			g_diag_sig = sig;
+			g_diag_last = now;
+			g_diag_blocks++;
+			std::string body = std::format("frame {}: {} skinned instance(s) within {:.0f} units of the camera (block {}/{})",
+				now, g_diag.size(), kDiagRadius, g_diag_blocks, kDiagBlocks);
+			for (const auto& e : g_diag)
+			{
+				std::string chain;
+				uintptr_t obj = e.geo;
+				for (int i = 0; i < 5 && obj; i++)
+				{
+					uintptr_t parent = 0;
+					uint32_t flags = 0;
+					if (!scene_graph::read_link(obj, parent, flags)) break;
+					chain += (i ? " < " : "") + object_name(obj) + ((flags & 1u) ? "[culled]" : "");
+					obj = parent;
+				}
+				char tex[96] = "-";
+				scene_graph::GeoRead gr;
+				if (e.geo && scene_graph::read_geo(e.geo, gr))
+				{
+					const uintptr_t t = scene_graph::ppl_texture(gr.props[scene_graph::fnv::kPropShade], 0);
+					if (!t || !scene_graph::texture_name(t, tex, sizeof(tex))) std::snprintf(tex, sizeof(tex), "-");
+				}
+				body += std::format("\n    geo 0x{:08X} {} | tex {} | pass 0x{:03X} vm={} firstPersonNode={} | slot0 rel ({:.0f}, {:.0f}, {:.0f}) | "
+					"{} bones, {} verts, PS 0x{:08X}", e.geo, chain, tex, e.pass, e.vm ? 1 : 0, e.fp_node ? 1 : 0,
+					e.rel[0], e.rel[1], e.rel[2], e.nb, e.verts, e.ps);
+			}
+			shared::common::log("FirstPersonDiag", body, shared::common::LOG_TYPE::LOG_TYPE_STATUS, false);
+			g_diag.clear();
+		}
+
 		// ---- Submission --------------------------------------------------------------
 
 		// This frame's DrawInstance of `sm` with the captured palette. False:
@@ -888,6 +1007,7 @@ namespace comp::game::api_submit
 				why = Reason::Submit;
 				return false;
 			}
+			diag_note(sm, nb);
 			return true;
 		}
 	}
@@ -1391,6 +1511,7 @@ namespace comp::game::api_submit
 			std::erase_if(g_normal_seen, [now](const auto& p) { return now - p.second.frame > kFaceGenSeenFrames; });
 		}
 
+		diag_flush(now);
 
 		// This frame's objects: the invariant, then a fresh frame.
 		for (const auto& [key, o] : g_objects)
