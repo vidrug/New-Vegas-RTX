@@ -247,6 +247,9 @@ namespace comp::game::api_submit
 			uint32_t heads = 0, heads_last = 0;                // FaceGen instances
 			uint32_t heads_refreshed = 0, heads_refreshed_last = 0;   // morph meshes re-sent (VB rewritten: heads, refilled buffers)
 			uint32_t heads_refused = 0, heads_refused_last = 0;
+			uint32_t heads_fg_later = 0, heads_fg_later_last = 0;   // FaceGen maps taken from the part's TEXTURE_(S)Fg pass
+			uint32_t heads_normal_later = 0, heads_normal_later_last = 0;   // normal map + gloss taken from a light pass
+			uint32_t heads_normal_seen = 0, heads_normal_seen_last = 0;     // head lighting passes whose normal map was kept
 			uint32_t blended = 0, blended_last = 0;            // instances with the draw's alpha blend
 			uint32_t held = 0, held_last = 0;                  // instances sent with the held pose
 			uint32_t meshes_built = 0, meshes_built_last = 0;
@@ -327,6 +330,88 @@ namespace comp::game::api_submit
 		// Partition (object without the palette) -> last frame the API
 		// claimed one of its objects.
 		std::unordered_map<uint64_t, UINT> g_part_claim;
+
+		// ---- FaceGen maps from a later pass ---------------------------------------
+		// Lit by several lights, an actor's FaceGen parts (heads, bodies, hands) go
+		// AMBIENT (SLS1000: DiffuseMap alone) -> light passes (SKIN2004 / 2006: no
+		// FaceGen maps) -> TEXTURE_SFg (SLS1005: DiffuseMap s0, DecalMap s1 =
+		// FaceGenMap0, Decal2Map s2 = FaceGenMap1; TEXTURE_Fg the same). The API
+		// claims the first pass and drops the rest, so such a part went out with
+		// its BaseMap alone: no per-NPC complexion (and nothing for an SSS hook
+		// that looks for the two-layer FaceGen material). The TEXTURE_(S)Fg pass's
+		// maps are kept per NiGeometry and the claiming pass takes them from the
+		// next frame on (a new material key: the mesh is rebuilt once).
+		constexpr uint16_t kPassTextureFg = 0x14B;    // BSSM_TEXTURE_Fg
+		constexpr uint16_t kPassTextureSFg = 0x150;   // BSSM_TEXTURE_SFg
+		// Maps seen within this many frames are used: that pass runs every frame
+		// the part is drawn, so the textures are alive.
+		constexpr UINT kFaceGenSeenFrames = 2;
+		struct FaceGenSeen
+		{
+			IDirect3DBaseTexture9* fg0 = nullptr;
+			IDirect3DBaseTexture9* fg1 = nullptr;
+			UINT frame = 0;
+		};
+		std::unordered_map<uintptr_t, FaceGenSeen> g_facegen_seen;   // NiGeometry -> its TEXTURE_(S)Fg maps
+
+		// The draw is a TEXTURE_Fg / TEXTURE_SFg pass: FaceGen maps on stages 1 and 2.
+		bool texture_facegen_pass()
+		{
+			const auto& e = engine_class::current();
+			return e.facegen() && (e.type == kPassTextureFg || e.type == kPassTextureSFg);
+		}
+
+		uintptr_t pass_geometry()
+		{
+			const uintptr_t g = engine_class::current().geometry;
+			return g ? g : scene_graph::current_geometry();
+		}
+
+		void remember_facegen(UINT now)
+		{
+			const uintptr_t geo = pass_geometry();
+			if (!geo) return;
+			const auto& ffp = shared::common::ffp_state::get();
+			auto* fg0 = ffp.cur_texture(1);
+			auto* fg1 = ffp.cur_texture(2);
+			if (fg0 && fg1) g_facegen_seen[geo] = FaceGenSeen{ fg0, fg1, now };
+		}
+
+		// The same for the normal map (skin that looked like plastic):
+		// AMBIENT (SLS1000) has no NormalMap, the light passes (SKIN2004 / 2006:
+		// BaseMap s0, NormalMap s1) do. A part claimed on AMBIENT went out without
+		// the normal map and the gloss the game reads from its alpha (Toggles.z),
+		// i.e. smooth skin with one constant roughness. A light pass's normal map
+		// and gloss are kept per NiGeometry like the FaceGen maps.
+		struct NormalSeen
+		{
+			IDirect3DBaseTexture9* normal = nullptr;
+			bool gloss_alpha = false;
+			float gloss = 0.0f;
+			UINT frame = 0;
+		};
+		std::unordered_map<uintptr_t, NormalSeen> g_normal_seen;   // NiGeometry -> a light pass's normal map
+
+		void remember_normal(const PsSlotMap* psmap, UINT now)
+		{
+			const auto& rc = rtxconf::scalars();
+			if (!psmap || !rc.protocol_enabled || !psmap->has(PsSlotRole::Normal)) return;
+			const uintptr_t geo = pass_geometry();
+			if (!geo) return;
+			const auto& ffp = shared::common::ffp_state::get();
+			auto* n = ffp.cur_texture(psmap->slot(PsSlotRole::Normal));
+			if (!n) return;
+			NormalSeen s;
+			s.normal = n;
+			s.frame = now;
+			s.gloss_alpha = psmap->toggles_reg != PsSlotMap::kNoReg && psmap->base_map_count <= 1 && rc.normal_alpha_mode == 1;
+			if (s.gloss_alpha)
+			{
+				const float g = ffp.ps_const_data()[psmap->toggles_reg * 4 + 2];
+				if (std::isfinite(g) && g > 0.0f) s.gloss = (std::min)(g, 4096.0f);
+			}
+			g_normal_seen[geo] = s;
+		}
 
 		// The reason of the last refusal of evaluate().
 		Reason g_last_reason = Reason::Inactive;
@@ -958,6 +1043,21 @@ namespace comp::game::api_submit
 					if (std::isfinite(g) && g > 0.0f) md.gloss = (std::min)(g, 4096.0f);
 				}
 			}
+			// A FaceGen part claimed on a pass without a normal map (AMBIENT):
+			// the normal map and gloss of the same part's light pass (g_normal_seen).
+			if (head && !md.normal && rc.protocol_enabled)
+			{
+				const uintptr_t geo = pass_geometry();
+				const auto it = geo ? g_normal_seen.find(geo) : g_normal_seen.end();
+				if (it != g_normal_seen.end() && frame() - it->second.frame <= kFaceGenSeenFrames)
+				{
+					md.normal_role = true;
+					md.normal = it->second.normal;
+					md.gloss_alpha = it->second.gloss_alpha;
+					md.gloss = it->second.gloss;
+					if (!dry) g_count.heads_normal_later++;
+				}
+			}
 			if (rc.protocol_enabled && psmap->has(PsSlotRole::Glow))
 			{
 				md.glow = ffp.cur_texture(psmap->slot(PsSlotRole::Glow));
@@ -978,11 +1078,33 @@ namespace comp::game::api_submit
 				? ffp.cur_texture(psmap->slot(PsSlotRole::Height)) : nullptr;
 			// A FaceGen head's per-NPC detail and tint (material::Desc::facegen0).
 			// Without float uploads the head keeps its BaseMap alone.
-			if (head && psmap->facegen0_slot != PsSlotMap::kNoSlot && psmap->facegen1_slot != PsSlotMap::kNoSlot &&
-				textures::half_float_supported())
+			if (head && textures::half_float_supported())
 			{
-				md.facegen0 = ffp.cur_texture(psmap->facegen0_slot);
-				md.facegen1 = ffp.cur_texture(psmap->facegen1_slot);
+				if (psmap->facegen0_slot != PsSlotMap::kNoSlot && psmap->facegen1_slot != PsSlotMap::kNoSlot)
+				{
+					md.facegen0 = ffp.cur_texture(psmap->facegen0_slot);
+					md.facegen1 = ffp.cur_texture(psmap->facegen1_slot);
+				}
+				else if (texture_facegen_pass())
+				{
+					// SLS1005 names them DecalMap / Decal2Map (not FaceGenMap0 / 1).
+					md.facegen0 = ffp.cur_texture(1);
+					md.facegen1 = ffp.cur_texture(2);
+				}
+				// A pass without them (AMBIENT, the light passes): the maps the
+				// same part's TEXTURE_(S)Fg pass bound (g_facegen_seen).
+				if (!md.facegen0 || !md.facegen1)
+				{
+					md.facegen0 = md.facegen1 = nullptr;
+					const uintptr_t geo = pass_geometry();
+					const auto it = geo ? g_facegen_seen.find(geo) : g_facegen_seen.end();
+					if (it != g_facegen_seen.end() && frame() - it->second.frame <= kFaceGenSeenFrames)
+					{
+						md.facegen0 = it->second.fg0;
+						md.facegen1 = it->second.fg1;
+						if (!dry) g_count.heads_fg_later++;
+					}
+				}
 				if (!md.facegen0 || !md.facegen1) md.facegen0 = md.facegen1 = nullptr;
 			}
 			// The albedo's own sampler stage (not stage 0): addressing and filter;
@@ -1131,6 +1253,17 @@ namespace comp::game::api_submit
 
 	// ---- Entry points ----------------------------------------------------------------
 
+	void skinned_lighting_pass(const PsSlotMap* psmap)
+	{
+		// The head's per-light passes carry no BaseMap, so the renderer drops
+		// them before try_skinned and remember_normal never saw a normal map
+		// (plastic skin again on Johnson Nash, Primm, 2026-11-07:
+		// "normal maps from a light pass 0" in every status line).
+		if (!psmap || !psmap->has(PsSlotRole::Normal) || !engine_class::facegen_head(psmap)) return;
+		remember_normal(psmap, frame());
+		g_count.heads_normal_seen++;
+	}
+
 	SkinnedPass try_skinned(IDirect3DDevice9* dev, const PsSlotMap* psmap, const DrawDesc& d, const char*& why)
 	{
 		PROFILE_ZONE_N("api::try_skinned");
@@ -1142,6 +1275,10 @@ namespace comp::game::api_submit
 		const void* tex = psmap ? ffp.cur_texture(psmap->slot(PsSlotRole::Diffuse)) : nullptr;
 		const UINT now = frame();
 		bool blend = false;
+		// A FaceGen part's TEXTURE_(S)Fg pass, claimed, extra or refused: its maps
+		// serve the part's claiming pass (g_facegen_seen).
+		if (head && texture_facegen_pass()) remember_facegen(now);
+		if (head) remember_normal(psmap, now);
 
 		// The pass is refused: not drawn.
 		const auto refuse = [&](Reason r, ObjectFrame* o) {
@@ -1248,7 +1385,12 @@ namespace comp::game::api_submit
 		}
 
 		if ((now & 63u) == 0)
+		{
 			std::erase_if(g_poses, [now](const auto& p) { return now - p.second.frame > kHoldForgetFrames; });
+			std::erase_if(g_facegen_seen, [now](const auto& p) { return now - p.second.frame > kFaceGenSeenFrames; });
+			std::erase_if(g_normal_seen, [now](const auto& p) { return now - p.second.frame > kFaceGenSeenFrames; });
+		}
+
 
 		// This frame's objects: the invariant, then a fresh frame.
 		for (const auto& [key, o] : g_objects)
@@ -1277,6 +1419,9 @@ namespace comp::game::api_submit
 		c.first_person_last = std::exchange(c.first_person, 0u);
 		c.heads_last = std::exchange(c.heads, 0u);
 		c.heads_refused_last = std::exchange(c.heads_refused, 0u);
+		c.heads_fg_later_last = std::exchange(c.heads_fg_later, 0u);
+		c.heads_normal_later_last = std::exchange(c.heads_normal_later, 0u);
+		c.heads_normal_seen_last = std::exchange(c.heads_normal_seen, 0u);
 		c.heads_refreshed_last = std::exchange(c.heads_refreshed, 0u);
 		c.held_last = std::exchange(c.held, 0u);
 		c.blended_last = std::exchange(c.blended, 0u);
@@ -1292,6 +1437,8 @@ namespace comp::game::api_submit
 		g_retry_at.clear();
 		g_objects.clear();
 		g_part_claim.clear();
+		g_facegen_seen.clear();   // texture pointers: not across a reset
+		g_normal_seen.clear();
 	}
 
 	void skinned_drop_all()
@@ -1313,6 +1460,8 @@ namespace comp::game::api_submit
 		g_objects.clear();
 		g_part_claim.clear();
 		g_poses.clear();
+		g_facegen_seen.clear();
+		g_normal_seen.clear();
 		st.live = 0;
 	}
 
@@ -1331,12 +1480,15 @@ namespace comp::game::api_submit
 		const double bones_avg = c.instances_last ? static_cast<double>(c.bones_sum_last) / c.instances_last : 0.0;
 		return std::format("skinned: instances={} suppressed={} folded={} extraSkipped={} "
 			"(predicted {}) mixed={} (total {}) orphaned={} meshes={} materials={} built={}+{}mat "
-			"bones/instance max={} avg={:.1f} posesHeld={} firstPerson={} heads={} (refused {}, morph refreshes {}) blended={} "
+			"bones/instance max={} avg={:.1f} posesHeld={} firstPerson={} heads={} (refused {}, morph refreshes {}, "
+			"FaceGen maps from the TEXTURE_SFg pass {}, normal maps from a light pass {} (light passes seen {})) blended={} "
 			"opaqueBlendDropped={} refused={}{} evicted={} failed={} bridgeFix={}",
 			c.instances_last, c.suppressed_last, c.folded_last, c.extra_skipped_last,
 			c.predicted_last, c.mixed_last, c.mixed_total, c.orphaned_last, s.live, g_materials.size(), c.meshes_built_last,
 			c.materials_built_last, c.bones_max_last, bones_avg, c.held_last, c.first_person_last, c.heads_last,
-			c.heads_refused_last, c.heads_refreshed_last, c.blended_last, c.opaque_blend_last, total,
+			c.heads_refused_last, c.heads_refreshed_last, c.heads_fg_later_last, c.heads_normal_later_last,
+			c.heads_normal_seen_last, c.blended_last,
+			c.opaque_blend_last, total,
 			reasons.empty() ? std::string() : std::format(" ({})", reasons),
 			s.evicted, s.failed, g_bridge_fix < 0 ? "unchecked" : g_bridge_fix ? "yes" : "NO");
 	}

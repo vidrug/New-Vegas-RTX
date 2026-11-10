@@ -98,6 +98,11 @@ namespace comp::game::api_submit
 	SkinnedPass try_skinned(IDirect3DDevice9* dev, const shared::common::PsSlotMap* psmap, const api::DrawDesc& d,
 		const char*& why);
 
+	// A skinned lighting-only pass the renderer drops (no BaseMap; NormalMap
+	// on s0): on a FaceGen head its normal map and gloss are kept for the
+	// part's claiming pass (AMBIENT has none), see remember_normal.
+	void skinned_lighting_pass(const shared::common::PsSlotMap* psmap);
+
 	// The skinned part of the periodic status line.
 	std::string skinned_status();
 

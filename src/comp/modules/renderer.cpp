@@ -1092,6 +1092,7 @@ namespace comp
 
 			using game::api_submit::SkinnedPass;
 			const char* why = nullptr;
+			if (lighting_only) game::api_submit::skinned_lighting_pass(psmap);   // a head's normal map, kept
 			const SkinnedPass api = lighting_only ? SkinnedPass::Skip : game::api_submit::try_skinned(dev, psmap, desc, why);
 			if (lighting_only) route_tag(diag, "SKINNED_SKIP_LIGHT");
 			else if (api == SkinnedPass::Taken) route_tag(diag, "API_SKINNED");
