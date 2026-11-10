@@ -268,6 +268,18 @@ namespace comp::host_settings
 			text += std::string(eol) + "[" + section + "]" + eol + entry;
 		}
 
+		// The file has another name besides this one (a hard link).
+		bool hard_linked(const std::string& path)
+		{
+			const HANDLE file = CreateFileA(path.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+				nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+			if (file == INVALID_HANDLE_VALUE) return false;
+			BY_HANDLE_FILE_INFORMATION info{};
+			const bool linked = GetFileInformationByHandle(file, &info) && info.nNumberOfLinks > 1;
+			CloseHandle(file);
+			return linked;
+		}
+
 		void save_to_ini(const Setting& s, double v)
 		{
 			if (!s.sec) return;
@@ -291,6 +303,25 @@ namespace comp::host_settings
 						shared::common::LOG_TYPE::LOG_TYPE_WARN, true);
 					return;
 				}
+			}
+			// A mod manager that deploys by hard links (Vortex) keeps the ini as
+			// one file under two names. Replacing it would leave the manager's
+			// name with the old text, so such a file is rewritten in place; the
+			// complete .tmp stays beside it until that write is through.
+			if (hard_linked(path))
+			{
+				bool written = false;
+				{
+					std::ofstream out(path, std::ios::binary | std::ios::trunc);
+					out.write(text.data(), static_cast<std::streamsize>(text.size()));
+					out.flush();
+					written = static_cast<bool>(out);
+				}
+				if (written) DeleteFileA(tmp.c_str());
+				else
+					shared::common::log("HostSettings", std::format("could not rewrite {} in place; its new text is in {}", path, tmp),
+						shared::common::LOG_TYPE::LOG_TYPE_WARN, true);
+				return;
 			}
 			if (!MoveFileExA(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
 			{
