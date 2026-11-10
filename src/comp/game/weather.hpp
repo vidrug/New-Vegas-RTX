@@ -17,6 +17,10 @@
 // the engine applies with no blend) fades over the preset's transition time.
 // For the first frames after a sky appears (a load, a worldspace change) the
 // blend is 1 with outgoing = current, so the sky snaps to the weather.
+// In an interior (nvse_link facts) the sky is not on screen, and the runtime
+// re-bakes its sky tables on every frame a weather change lasts: there the
+// current weather is reported the same way, so a cut and an engine
+// transition alike are in place at once.
 // Without a sky or a current weather (menus, interiors) or when the reads
 // fail, the ids are empty and NUMOS shows the dev menu's preset or the
 // settings alone.

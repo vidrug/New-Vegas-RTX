@@ -1,5 +1,6 @@
 #include "std_include.hpp"
 #include "weather.hpp"
+#include "nvse_link.hpp"
 
 #include <sstream>
 
@@ -308,10 +309,17 @@ namespace comp::game::weather
 			return;
 		}
 
+		// In an interior the sky is not on screen, and the runtime re-bakes its sky tables on every
+		// frame a weather change lasts (a fade of its own or the engine's transition). There the
+		// current weather is reported as already in place.
+		const FnvRemixFacts& facts = nvse_link::facts();
+		const bool indoors = facts.ready && facts.interior;
+		const bool transition = st.has_outgoing && !indoors;
+
 		const int cur_class = classify(st.current);
 		const std::string cur_ids = ids(st.current, cur_class);
 		int out_class = -1;
-		if (st.has_outgoing)
+		if (transition)
 		{
 			out_class = classify(st.outgoing);
 			s_snap = 0;
@@ -319,9 +327,9 @@ namespace comp::game::weather
 			s_outgoing.push(ids(st.outgoing, out_class));
 			s_blend.push(std::format("{:.3f}", st.percent));
 		}
-		else if (s_snap > 0)
+		else if (s_snap > 0 || indoors)
 		{
-			s_snap--;
+			if (s_snap > 0) s_snap--;
 			s_current.push(cur_ids);
 			s_outgoing.push(cur_ids);
 			s_blend.push("1");
@@ -333,23 +341,23 @@ namespace comp::game::weather
 			s_blend.push("-1");
 		}
 
-		const uint32_t out_id = st.has_outgoing ? st.outgoing.form_id : 0;
+		const uint32_t out_id = transition ? st.outgoing.form_id : 0;
 		if (s_logged_none || st.current.form_id != s_logged_current || out_id != s_logged_outgoing)
 		{
-			if (st.has_outgoing)
+			if (transition)
 				log(std::format("transition {:.0f}%: {}  <-  from {}", st.percent * 100.0f,
 					describe(st.current, cur_class), describe(st.outgoing, out_class)));
 			else if (s_logged_outgoing && st.current.form_id == s_logged_current)
 				log(std::format("transition complete: {}", describe(st.current, cur_class)));
 			else
-				log(std::format("{}: {}", s_snap > 0 ? "weather (snap)" : "weather (runtime fade)",
+				log(std::format("{}: {}", indoors ? "weather (at once: interior)" : s_snap > 0 ? "weather (snap)" : "weather (runtime fade)",
 					describe(st.current, cur_class)));
 			s_logged_none = false;
 			s_logged_current = st.current.form_id;
 			s_current_name = std::format("{:08X} {}", st.current.form_id, WEATHER_CLASS_NAMES[cur_class]);
 			s_logged_outgoing = out_id;
 		}
-		else if (st.has_outgoing && (s_frame % 600) == 0)
+		else if (transition && (s_frame % 600) == 0)
 		{
 			log(std::format("transition {:.0f}% to {:08X}", st.percent * 100.0f, st.current.form_id));
 		}
