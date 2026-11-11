@@ -24,6 +24,12 @@
 // Without a sky or a current weather (menus, interiors) or when the reads
 // fail, the ids are empty and NUMOS shows the dev menu's preset or the
 // settings alone.
+//
+// The kind of cell is pushed apart from the weather, whenever the plugin's
+// facts are ready:
+//   rtx.weather.gameInterior         True in an interior cell
+// There the runtime skips the cloud layer on screen and the primary surface's
+// own sun and moon shadow ray; the sky still lights the cell.
 
 namespace comp::game::weather
 {

@@ -111,6 +111,7 @@ namespace comp::game::weather
 		pushed s_current  { "rtx.weather.gameWeather" };
 		pushed s_outgoing { "rtx.weather.gameWeatherOutgoing" };
 		pushed s_blend    { "rtx.weather.gameWeatherBlend" };
+		pushed s_interior { "rtx.weather.gameInterior" };
 
 		const void* s_sky = nullptr;
 		int s_settle = 0;
@@ -264,11 +265,12 @@ namespace comp::game::weather
 		if (!shared::common::config::get().weather.enabled)
 		{
 			// Leave the runtime's weather as if the wrapper never set it.
-			if (!s_reported_none && (s_current.sent || s_outgoing.sent || s_blend.sent))
+			if (!s_reported_none && (s_current.sent || s_outgoing.sent || s_blend.sent || s_interior.sent))
 			{
 				s_current.push("");
 				s_outgoing.push("");
 				s_blend.push("-1");
+				s_interior.push("False");
 				log("Enabled=0: no game weather reported");
 			}
 			s_reported_none = true;
@@ -276,6 +278,11 @@ namespace comp::game::weather
 			return;
 		}
 		s_reported_none = false;
+
+		// The kind of cell goes out whatever the sky reports: in an interior the runtime leaves out sky work that
+		// cannot show there (the cloud layer on screen, the primary surface's own sun and moon shadow ray).
+		const FnvRemixFacts& facts = nvse_link::facts();
+		if (facts.ready) s_interior.push(facts.interior ? "True" : "False");
 
 		const void* sky = try_get_sky();
 		if (!sky)
@@ -312,7 +319,6 @@ namespace comp::game::weather
 		// In an interior the sky is not on screen, and the runtime re-bakes its sky tables on every
 		// frame a weather change lasts (a fade of its own or the engine's transition). There the
 		// current weather is reported as already in place.
-		const FnvRemixFacts& facts = nvse_link::facts();
 		const bool indoors = facts.ready && facts.interior;
 		const bool transition = st.has_outgoing && !indoors;
 
